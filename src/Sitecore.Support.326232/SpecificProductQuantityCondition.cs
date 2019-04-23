@@ -7,13 +7,21 @@
 // </summary>
 // --------------------------------------------------------------------------------------------------------------------
 
-namespace Sitecore.Commerce.Rules.Conditions
+namespace Sitecore.Support.Commerce.Rules.Conditions
 {
   using System;
   using System.Collections.Generic;
+  using System.Globalization;
   using System.Linq;
   using Sitecore.Commerce.Entities.Carts;
+  using Sitecore.Commerce.Rules.Conditions;
+  using Sitecore.Commerce.Services.Carts;
+  using Sitecore.Commerce.Services.Customers;
+  using Sitecore.Configuration;
+  using Sitecore.Diagnostics;
   using Sitecore.Rules;
+  using Sitecore.Rules.Conditions;
+  using Sitecore.Sites;
 
   /// <summary>
   /// Defines the condition to compare the quantity of a product with a predefined value.
@@ -35,7 +43,17 @@ namespace Sitecore.Commerce.Rules.Conditions
     /// Gets or sets the product quantity.
     /// </summary>
     /// <value>The product quantity.</value>
-    public uint ProductQuantity { get; set; }
+    public decimal ProductQuantity { get; set; }
+
+    #region fixvariableandconstructor
+    private CustomerServiceProvider customerServiceProvider;
+    
+
+    public SpecificProductQuantityCondition() : base()
+    {
+      this.customerServiceProvider = (CustomerServiceProvider)Factory.CreateObject("customerServiceProvider", true);
+    }
+    #endregion
 
     /// <summary>
     /// Gets the cart metrics.
@@ -55,5 +73,66 @@ namespace Sitecore.Commerce.Rules.Conditions
     {
       return this.ProductQuantity;
     }
+
+    #region fix
+    protected override bool Execute(T ruleContext)
+    {
+      SiteContext shopContext = Context.Site;
+
+      Assert.IsNotNull(shopContext, Sitecore.Commerce.Texts.ContextSiteCannotBeNull);
+
+      string userId = this.GetCurrentUserId();
+
+      GetCartsRequest getCartsRequest = new GetCartsRequest(shopContext.Name) { UserIds = new[] { userId } };
+      IEnumerable<Cart> carts = this.CartServiceProvider.GetCarts(getCartsRequest).Carts.Select(cartBase => this.CartServiceProvider.LoadCart(new LoadCartRequest(shopContext.Name, cartBase.ExternalId, userId)).Cart);
+
+      var conditionOperator = this.GetOperator();
+      var isConditionMet = false;
+
+      switch (conditionOperator)
+      {
+        case ConditionOperator.Equal:
+          isConditionMet = this.GetCartMetrics(carts).CompareTo(this.GetPredefinedValue()) == 0;
+          break;
+        case ConditionOperator.GreaterThan:
+          isConditionMet = this.GetCartMetrics(carts).CompareTo(this.GetPredefinedValue()) > 0;
+          break;
+        case ConditionOperator.GreaterThanOrEqual:
+          isConditionMet = this.GetCartMetrics(carts).CompareTo(this.GetPredefinedValue()) >= 0;
+          break;
+        case ConditionOperator.LessThan:
+          isConditionMet = this.GetCartMetrics(carts).CompareTo(this.GetPredefinedValue()) < 0;
+          break;
+        case ConditionOperator.LessThanOrEqual:
+          isConditionMet = this.GetCartMetrics(carts).CompareTo(this.GetPredefinedValue()) <= 0;
+          break;
+        case ConditionOperator.NotEqual:
+          isConditionMet = this.GetCartMetrics(carts).CompareTo(this.GetPredefinedValue()) != 0;
+          break;
+        default:
+          throw new InvalidOperationException(Sitecore.Commerce.Texts.OperatorIsNotSupported);
+      }
+
+      Log.Debug(string.Format(CultureInfo.InvariantCulture, "Connect cart condition: userId:{0}, Condition operator: {1}, ConditionMet: {2}, Number of carts found: {3}, Type: {4}", userId, conditionOperator, isConditionMet, (carts != null) ? carts.Count() : 0, this.GetType()));
+
+      return isConditionMet;
+    }
+
+    protected virtual string GetCurrentUserId()
+    {
+      string userName = this.ContactFactory.GetContact();
+
+      if (Sitecore.Context.User.IsAuthenticated)
+      {
+        var result = this.customerServiceProvider.GetUser(new GetUserRequest(userName));
+        if (result != null && result.Success && result.CommerceUser != null)
+        {
+          userName = result.CommerceUser.ExternalId;
+        }
+      }
+
+      return userName;
+    }
+    #endregion
   }
 }
